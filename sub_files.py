@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 '''Take a CSV with file metadata, POST new file objects to the ENCODE DCC, upload files to the ENCODE cloud bucket'''
 
-import os, sys, logging, urlparse, requests, csv, StringIO, re, copy, json, subprocess
+import os, sys, logging, urlparse, requests, csv, StringIO, re, copy, json, subprocess, hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def get_args():
 	parser.add_argument('--authid',		help="The authorization key ID for the server.", default=os.getenv('ENCODE_AUTHID',None))
 	parser.add_argument('--authpw',		help="The authorization key for the server.", default=os.getenv('ENCODE_AUTHPW',None))
 	parser.add_argument('--dryrun',		help="Don't POST to the database, just validate input.", default=False, action='store_true')
+	parser.add_argument('--encvaldata',	help="Directory in which https://github.com/ENCODE-DCC/encValData.git is cloned.", default=os.path.expanduser("~/encValData/"))
 
 	args = parser.parse_args()
 
@@ -54,28 +55,38 @@ def get_args():
 	if not args.authid or not args.authpw:
 		logger.error('Authorization keypair must be specified on the command line or in environment ENCODE_AUTHID, ENCODE_AUTHPW')
 		sys.exit(1)
+	if not os.path.isdir(args.encvaldata):
+		logger.error('No ENCODE validation data.  git clone https://github.com/ENCODE-DCC/encValData.git')
+		sys.exit(1)
 
 	return args
 
-def md5(fn):
-	if 'md5_command' not in globals():
-		global md5_command
-		if subprocess.check_output('which md5', shell=True):
-			md5_command = 'md5 -q'
-		elif subprocess.check_output('which md5sum', shell=True):
-			md5_command = 'md5sum'
-		else:
-			md5_command = ''
-	if not md5_command:
-		logger.error("No MD5 command found (tried md5 and md5sum)")
-		return None
-	else:
-		try:
-			md5_output = subprocess.check_output(' '.join([md5_command, fn]), shell=True)
-		except:
-			return None
-		else:
-			return md5_output.partition(' ')[0].rstrip()
+def md5(path):
+	md5sum = hashlib.md5()
+	with open(path, 'rb') as f:
+		for chunk in iter(lambda: f.read(1024*1024), b''):
+			md5sum.update(chunk)
+	return md5sum.hexdigest()
+
+	# This does not depend on hashlib
+	# if 'md5_command' not in globals():
+	# 	global md5_command
+	# 	if subprocess.check_output('which md5', shell=True):
+	# 		md5_command = 'md5 -q'
+	# 	elif subprocess.check_output('which md5sum', shell=True):
+	# 		md5_command = 'md5sum'
+	# 	else:
+	# 		md5_command = ''
+	# if not md5_command:
+	# 	logger.error("No MD5 command found (tried md5 and md5sum)")
+	# 	return None
+	# else:
+	# 	try:
+	# 		md5_output = subprocess.check_output(' '.join([md5_command, fn]), shell=True)
+	# 	except:
+	# 		return None
+	# 	else:
+	# 		return md5_output.partition(' ')[0].rstrip()
 
 def test_encode_keys(server,keypair):
 	test_URI = "ENCBS000AAA"
@@ -106,8 +117,114 @@ def init_csvs(in_fh,out_fh):
 	output_writer = output_csv(out_fh,input_reader.fieldnames)
 	return input_reader, output_writer
 
-def validate_file(path):
-	return True
+def validate_file(f_obj, encValData, assembly=None):
+	path = f_obj.get('submitted_file_name')
+	file_format = f_obj.get('file_format')
+	file_format_type = f_obj.get('file_format_type')
+	output_type = f_obj.get('output_type')
+
+	gzip_types = [
+		"CEL",
+		"bam",
+		"bed",
+		"csfasta",
+		"csqual",
+		"fasta",
+		"fastq",
+		"gff",
+		"gtf",
+		"tar",
+		"sam",
+		"wig"
+	]
+
+	magic_number = open(path, 'rb').read(2)
+	is_gzipped = magic_number == b'\x1f\x8b'
+	if file_format in gzip_types:
+		if not is_gzipped:
+			logger.warning('%s: Expect %s format to be gzipped' %(path,file_format))
+	else:
+		if is_gzipped:
+			logger.warning('%s: Expect %s format to be un-gzipped' %(path,file_format))
+
+	if assembly:
+		chromInfo = '-chromInfo=%s/%s/chrom.sizes' % (encValData, assembly)
+	else:
+		chromInfo = None
+
+	validate_map = {
+		('fasta', None): ['-type=fasta'],
+		('fastq', None): ['-type=fastq'],
+		('bam', None): ['-type=bam', chromInfo],
+		('bigWig', None): ['-type=bigWig', chromInfo],
+		('bed', 'bed3'): ['-type=bed3', chromInfo],
+		('bigBed', 'bed3'): ['-type=bed3', chromInfo],
+		('bed', 'bed6'): ['-type=bed6+', chromInfo],
+		('bigBed', 'bed6'): ['-type=bigBed6+', chromInfo],
+		('bed', 'bedLogR'): ['-type=bed9+1', chromInfo, '-as=%s/as/bedLogR.as' % encValData],
+		('bigBed', 'bedLogR'): ['-type=bigBed9+1', chromInfo, '-as=%s/as/bedLogR.as' % encValData],
+		('bed', 'bedMethyl'): ['-type=bed9+2', chromInfo, '-as=%s/as/bedMethyl.as' % encValData],
+		('bigBed', 'bedMethyl'): ['-type=bigBed9+2', chromInfo, '-as=%s/as/bedMethyl.as' % encValData],
+		('bed', 'broadPeak'): ['-type=bed6+3', chromInfo, '-as=%s/as/broadPeak.as' % encValData],
+		('bigBed', 'broadPeak'): ['-type=bigBed6+3', chromInfo, '-as=%s/as/broadPeak.as' % encValData],
+		('bed', 'gappedPeak'): ['-type=bed12+3', chromInfo, '-as=%s/as/gappedPeak.as' % encValData],
+		('bigBed', 'gappedPeak'): ['-type=bigBed12+3', chromInfo, '-as=%s/as/gappedPeak.as' % encValData],
+		('bed', 'narrowPeak'): ['-type=bed6+4', chromInfo, '-as=%s/as/narrowPeak.as' % encValData],
+		('bigBed', 'narrowPeak'): ['-type=bigBed6+4', chromInfo, '-as=%s/as/narrowPeak.as' % encValData],
+		('bed', 'bedRnaElements'): ['-type=bed6+3', chromInfo, '-as=%s/as/bedRnaElements.as' % encValData],
+		('bigBed', 'bedRnaElements'): ['-type=bed6+3', chromInfo, '-as=%s/as/bedRnaElements.as' % encValData],
+		('bed', 'bedExonScore'): ['-type=bed6+3', chromInfo, '-as=%s/as/bedExonScore.as' % encValData],
+		('bigBed', 'bedExonScore'): ['-type=bigBed6+3', chromInfo, '-as=%s/as/bedExonScore.as' % encValData],
+		('bed', 'bedRrbs'): ['-type=bed9+2', chromInfo, '-as=%s/as/bedRrbs.as' % encValData],
+		('bigBed', 'bedRrbs'): ['-type=bigBed9+2', chromInfo, '-as=%s/as/bedRrbs.as' % encValData],
+		('bed', 'enhancerAssay'): ['-type=bed9+1', chromInfo, '-as=%s/as/enhancerAssay.as' % encValData],
+		('bigBed', 'enhancerAssay'): ['-type=bigBed9+1', chromInfo, '-as=%s/as/enhancerAssay.as' % encValData],
+		('bed', 'modPepMap'): ['-type=bed9+7', chromInfo, '-as=%s/as/modPepMap.as' % encValData],
+		('bigBed', 'modPepMap'): ['-type=bigBed9+7', chromInfo, '-as=%s/as/modPepMap.as' % encValData],
+		('bed', 'pepMap'): ['-type=bed9+7', chromInfo, '-as=%s/as/pepMap.as' % encValData],
+		('bigBed', 'pepMap'): ['-type=bigBed9+7', chromInfo, '-as=%s/as/pepMap.as' % encValData],
+		('bed', 'openChromCombinedPeaks'): ['-type=bed9+12', chromInfo, '-as=%s/as/openChromCombinedPeaks.as' % encValData],
+		('bigBed', 'openChromCombinedPeaks'): ['-type=bigBed9+12', chromInfo, '-as=%s/as/openChromCombinedPeaks.as' % encValData],
+		('bed', 'peptideMapping'): ['-type=bed6+4', chromInfo, '-as=%s/as/peptideMapping.as' % encValData],
+		('bigBed', 'peptideMapping'): ['-type=bigBed6+4', chromInfo, '-as=%s/as/peptideMapping.as' % encValData],
+		('bed', 'shortFrags'): ['-type=bed6+21', chromInfo, '-as=%s/as/shortFrags.as' % encValData],
+		('bigBed', 'shortFrags'): ['-type=bigBed6+21', chromInfo, '-as=%s/as/shortFrags.as' % encValData],
+		('rcc', None): ['-type=rcc'],
+		('idat', None): ['-type=idat'],
+		('bedpe', None): ['-type=bed3+', chromInfo],
+		('bedpe', 'mango'): ['-type=bed3+', chromInfo],
+		('gtf', None): None,
+		('tar', None): None,
+		('tsv', None): None,
+		('csv', None): None,
+		('2bit', None): None,
+		('csfasta', None): ['-type=csfasta'],
+		('csqual', None): ['-type=csqual'],
+		('CEL', None): None,
+		('sam', None): None,
+		('wig', None): None,
+		('hdf5', None): None,
+		('gff', None): None
+	}
+
+	#special cases
+	if (file_format, file_format_type) == ('bed', 'bed3') and output_type in ['predicted forebrain enhancers', 'predicted heart enhancers', 'predicted enhancers']:
+		validate_args = ['-type=bed3+', chromInfo, '-as=%s/as/enhancer_prediction.as' %(encValData)]
+	else:
+		validate_args = validate_map.get(file_format, file_format_type)
+
+	if validate_args is None:
+		logger.warning('No rules to validate file_format %s and file_format_type %s' %(file_format, file_format_type))
+		return False
+	else:
+		try:
+			subprocess.check_output(['validateFiles'] + validate_args + [path])
+		except subprocess.CalledProcessError as e:
+			logger.error(e.output)
+			return False
+		else:
+			logger.debug("%s: validateFiles passed" %(path))
+			return True
 
 def post_file(file_metadata, server, keypair, dryrun=False):
 	local_path = file_metadata.get('submitted_file_name')
@@ -177,10 +294,14 @@ def main():
 	server = args.server
 	keypair = (args.authid, args.authpw)
 
-	if not args.dryrun: #check ENCODE and AWS keys
+	if not args.dryrun: #check ENCODE keys
 		if not test_encode_keys(server, keypair):
 			logger.error("Invalid ENCODE server or keys: server=%s authid=%s authpw=%s" %(args.server,args.authid,args.authpw))
 			sys.exit(1)
+
+	if not subprocess.check_output('which validateFiles', shell=True):
+		logger.error("Cannot find executable validateFiles. See http://hgdownload.cse.ucsc.edu/admin/exe/")
+		sys.exit(1)
 
 	input_csv, output_csv = init_csvs(args.infile, args.outfile)
 
@@ -188,9 +309,8 @@ def main():
 
 	for n,row in enumerate(input_csv,start=2): #row 1 is the header
 
-		local_path = row['submitted_file_name']
-		if not validate_file(local_path):
-			logger.warning('Skipping row %d: file %s failed validation' %(n,local_path))
+		if not validate_file(row, args.encvaldata, row.get('assembly')):
+			logger.warning('Skipping row %d: file %s failed validation' %(n,row['submitted_file_name']))
 			continue
 
 		json_payload = process_row(row)
