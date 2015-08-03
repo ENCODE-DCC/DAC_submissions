@@ -95,7 +95,7 @@ def test_encode_keys(server,keypair):
 	try:
 		r.raise_for_status()
 	except:
-		logger.debug('test_encode_keys got response.txt' %(r.text))
+		logger.debug('test_encode_keys got response %s' %(r.text))
 		return False
 	else:
 		return True
@@ -294,10 +294,9 @@ def main():
 	server = args.server
 	keypair = (args.authid, args.authpw)
 
-	if not args.dryrun: #check ENCODE keys
-		if not test_encode_keys(server, keypair):
-			logger.error("Invalid ENCODE server or keys: server=%s authid=%s authpw=%s" %(args.server,args.authid,args.authpw))
-			sys.exit(1)
+	if not test_encode_keys(server, keypair):
+		logger.error("Invalid ENCODE server or keys: server=%s authid=%s authpw=%s" %(args.server,args.authid,args.authpw))
+		sys.exit(1)
 
 	if not subprocess.check_output('which validateFiles', shell=True):
 		logger.error("Cannot find executable validateFiles. See http://hgdownload.cse.ucsc.edu/admin/exe/")
