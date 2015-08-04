@@ -211,7 +211,7 @@ def validate_file(f_obj, encValData, assembly=None):
 	if (file_format, file_format_type) == ('bed', 'bed3') and output_type in ['predicted forebrain enhancers', 'predicted heart enhancers', 'predicted enhancers']:
 		validate_args = ['-type=bed3+', chromInfo, '-as=%s/as/enhancer_prediction.as' %(encValData)]
 	else:
-		validate_args = validate_map.get(file_format, file_format_type)
+		validate_args = validate_map.get((file_format, file_format_type))
 
 	if validate_args is None:
 		logger.warning('No rules to validate file_format %s and file_format_type %s' %(file_format, file_format_type))
@@ -299,7 +299,7 @@ def main():
 		sys.exit(1)
 
 	try:
-		subprocess.check_output('which validateFiles', shell=True):
+		subprocess.check_output('which validateFiles', shell=True)
 	except:
 		logger.error("validateFiles is not in path. See http://hgdownload.cse.ucsc.edu/admin/exe/")
 		sys.exit(1)
