@@ -298,7 +298,9 @@ def main():
 		logger.error("Invalid ENCODE server or keys: server=%s authid=%s authpw=%s" %(args.server,args.authid,args.authpw))
 		sys.exit(1)
 
-	if not subprocess.check_output('which validateFiles', shell=True):
+	try:
+		subprocess.check_output('which validateFiles', shell=True):
+	except:
 		logger.error("Cannot find executable validateFiles. See http://hgdownload.cse.ucsc.edu/admin/exe/")
 		sys.exit(1)
 
