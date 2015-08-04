@@ -301,7 +301,7 @@ def main():
 	try:
 		subprocess.check_output('which validateFiles', shell=True):
 	except:
-		logger.error("Cannot find executable validateFiles. See http://hgdownload.cse.ucsc.edu/admin/exe/")
+		logger.error("validateFiles is not in path. See http://hgdownload.cse.ucsc.edu/admin/exe/")
 		sys.exit(1)
 
 	input_csv, output_csv = init_csvs(args.infile, args.outfile)
