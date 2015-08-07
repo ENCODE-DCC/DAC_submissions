@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 '''Take a CSV with file metadata, POST new file objects to the ENCODE DCC, upload files to the ENCODE cloud bucket'''
 
-import os, sys, logging, urlparse, requests, csv, StringIO, re, copy, json, subprocess, hashlib
+import os, sys, logging, urlparse, requests, csv, StringIO, re, copy, json, subprocess, hashlib, tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def init_csvs(in_fh,out_fh):
 	output_writer = output_csv(out_fh,input_reader.fieldnames)
 	return input_reader, output_writer
 
-def validate_file(f_obj, encValData, assembly=None):
+def validate_file(f_obj, encValData, assembly=None, as_path=None):
 	path = f_obj.get('submitted_file_name')
 	file_format = f_obj.get('file_format')
 	file_format_type = f_obj.get('file_format_type')
@@ -152,6 +152,11 @@ def validate_file(f_obj, encValData, assembly=None):
 	else:
 		chromInfo = None
 
+	if as_path:
+		as_file = '-as=%s' %(as_path)
+	else:
+		as_file = None
+
 	validate_map = {
 		('fasta', None): ['-type=fasta'],
 		('fastq', None): ['-type=fastq'],
@@ -159,6 +164,8 @@ def validate_file(f_obj, encValData, assembly=None):
 		('bigWig', None): ['-type=bigWig', chromInfo],
 		('bed', 'bed3'): ['-type=bed3', chromInfo],
 		('bigBed', 'bed3'): ['-type=bed3', chromInfo],
+		('bed', 'bed3+'): ['-type=bed3+', chromInfo],
+		('bigBed', 'bed3+'): ['-type=bed3+', chromInfo],
 		('bed', 'bed6'): ['-type=bed6+', chromInfo],
 		('bigBed', 'bed6'): ['-type=bigBed6+', chromInfo],
 		('bed', 'bedLogR'): ['-type=bed9+1', chromInfo, '-as=%s/as/bedLogR.as' % encValData],
@@ -207,24 +214,26 @@ def validate_file(f_obj, encValData, assembly=None):
 		('gff', None): None
 	}
 
-	#special cases
-	if (file_format, file_format_type) == ('bed', 'bed3') and output_type in ['predicted forebrain enhancers', 'predicted heart enhancers', 'predicted enhancers']:
-		validate_args = ['-type=bed3+', chromInfo, '-as=%s/as/enhancer_prediction.as' %(encValData)]
-	else:
-		validate_args = validate_map.get((file_format, file_format_type))
+	validate_args = validate_map.get((file_format, file_format_type))
 
 	if validate_args is None:
 		logger.warning('No rules to validate file_format %s and file_format_type %s' %(file_format, file_format_type))
 		return False
+	
+	if (file_format, file_format_type) in [('bed', 'bed3'), ('bed', 'bed3+')] and as_file: #TODO: Update file schema and change to bed3+
+		validate_args = ['-type=bed3+', chromInfo] #TODO: Update file schema.  This is to foce bed3+ for validateFiles but pass bed3 to file_format_type
+		validate_args.append(as_file)
+
+	tokens = ['validateFiles'] + validate_args + [path]
+	logger.debug('Running: %s' %(tokens))
+	try:
+		subprocess.check_output(tokens)
+	except subprocess.CalledProcessError as e:
+		logger.error("validateFiles returned %s" %(e.output))
+		return False
 	else:
-		try:
-			subprocess.check_output(['validateFiles'] + validate_args + [path])
-		except subprocess.CalledProcessError as e:
-			logger.error(e.output)
-			return False
-		else:
-			logger.debug("%s: validateFiles passed" %(path))
-			return True
+		logger.debug("%s: validateFiles passed" %(path))
+		return True
 
 def post_file(file_metadata, server, keypair, dryrun=False):
 	local_path = file_metadata.get('submitted_file_name')
@@ -272,6 +281,31 @@ def upload_file(file_obj, dryrun=False):
 		else:
 			return 0
 
+def get_asfile(uri_json, server, keypair):
+	try:
+		uris = json.loads(uri_json)
+	except:
+		logger.error("Could not parse as JSON: %s" %(uri_json))
+		return None
+	for uri in uris:
+		url = server + '/' + uri
+		r = requests.get(url, headers=GET_HEADERS, auth=keypair)
+		try:
+			r.raise_for_status()
+		except:
+			logger.error("Failed to get ENCODE object %s" %(uri))
+			return None
+		document_obj = r.json()
+		r = requests.get(urlparse.urljoin(server, document_obj['uuid'] + '/' + document_obj['attachment']['href']), auth=keypair)
+		try:
+			r.raise_for_status()
+		except:
+			logger.error("Failed to download ENCODE document %s" %(uri))
+			return None
+		f = tempfile.NamedTemporaryFile(delete=False)
+		f.write(r.text)
+		return f
+
 def process_row(row):
 	json_payload = {}
 	for key,value in row.iteritems():
@@ -310,7 +344,15 @@ def main():
 
 	for n,row in enumerate(input_csv,start=2): #row 1 is the header
 
-		if not validate_file(row, args.encvaldata, row.get('assembly')):
+		as_file = get_asfile(row.get('file_format_specifications'), server, keypair)
+		if as_file:
+			as_file.close() #validateFiles needs a closed file for -as, otherwise it gives a return code of -11
+			validated = validate_file(row, args.encvaldata, row.get('assembly'), as_file.name)
+			os.unlink(as_file.name)
+		else:
+			validated = validate_file(row, args.encvaldata, row.get('assembly'))
+
+		if not validated:
 			logger.warning('Skipping row %d: file %s failed validation' %(n,row['submitted_file_name']))
 			continue
 
