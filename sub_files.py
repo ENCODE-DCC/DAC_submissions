@@ -163,11 +163,9 @@ def validate_file(f_obj, encValData, assembly=None, as_path=None):
 		('bam', None): ['-type=bam', chromInfo],
 		('bigWig', None): ['-type=bigWig', chromInfo],
 		('bed', 'bed3'): ['-type=bed3', chromInfo],
-		('bigBed', 'bed3'): ['-type=bed3', chromInfo],
-		('bed', 'bed3+'): ['-type=bed3+', chromInfo],
-		('bigBed', 'bed3+'): ['-type=bed3+', chromInfo],
-		('bed', 'bed6'): ['-type=bed6+', chromInfo],
-		('bigBed', 'bed6'): ['-type=bigBed6+', chromInfo],
+		('bigBed', 'bed3'): ['-type=bigBed3', chromInfo],
+		('bed', 'bed6'): ['-type=bed6', chromInfo],  # if this fails we will drop to bed3+
+		('bigBed', 'bed6'): ['-type=bigBed6', chromInfo],  # if this fails we will drop to bigBed3+
 		('bed', 'bedLogR'): ['-type=bed9+1', chromInfo, '-as=%s/as/bedLogR.as' % encValData],
 		('bigBed', 'bedLogR'): ['-type=bigBed9+1', chromInfo, '-as=%s/as/bedLogR.as' % encValData],
 		('bed', 'bedMethyl'): ['-type=bed9+2', chromInfo, '-as=%s/as/bedMethyl.as' % encValData],
@@ -196,6 +194,30 @@ def validate_file(f_obj, encValData, assembly=None, as_path=None):
 		('bigBed', 'peptideMapping'): ['-type=bigBed6+4', chromInfo, '-as=%s/as/peptideMapping.as' % encValData],
 		('bed', 'shortFrags'): ['-type=bed6+21', chromInfo, '-as=%s/as/shortFrags.as' % encValData],
 		('bigBed', 'shortFrags'): ['-type=bigBed6+21', chromInfo, '-as=%s/as/shortFrags.as' % encValData],
+		('bed', 'encode_elements_H3K27ac'): ['-tab', '-type=bed9+1', chromInfo, '-as=%s/as/encode_elements_H3K27ac.as' % encValData],
+		('bigBed', 'encode_elements_H3K27ac'): ['-tab', '-type=bigBed9+1', chromInfo, '-as=%s/as/encode_elements_H3K27ac.as' % encValData],
+		('bed', 'encode_elements_H3K9ac'): ['-tab', '-type=bed9+1', chromInfo, '-as=%s/as/encode_elements_H3K9ac.as' % encValData],
+		('bigBed', 'encode_elements_H3K9ac'): ['-tab', '-type=bigBed9+1', chromInfo, '-as=%s/as/encode_elements_H3K9ac.as' % encValData],
+		('bed', 'encode_elements_H3K4me1'): ['-tab', '-type=bed9+1', chromInfo, '-as=%s/as/encode_elements_H3K4me1.as' % encValData],
+		('bigBed', 'encode_elements_H3K4me1'): ['-tab', '-type=bigBed9+1', chromInfo, '-as=%s/as/encode_elements_H3K4me1.as' % encValData],
+		('bed', 'encode_elements_H3K4me3'): ['-tab', '-type=bed9+1', chromInfo, '-as=%s/as/encode_elements_H3K4me3.as' % encValData],
+		('bigBed', 'encode_elements_H3K4me3'): ['-tab', '-type=bigBed9+1', chromInfo, '-as=%s/as/encode_elements_H3K4me3.as' % encValData],
+		('bed', 'dnase_master_peaks'): ['-tab', '-type=bed9+1', chromInfo, '-as=%s/as/dnase_master_peaks.as' % encValData],
+		('bigBed', 'dnase_master_peaks'): ['-tab', '-type=bigBed9+1', chromInfo, '-as=%s/as/dnase_master_peaks.as' % encValData],
+		('bed', 'encode_elements_dnase_tf'): ['-tab', '-type=bed5+1', chromInfo, '-as=%s/as/encode_elements_dnase_tf.as' % encValData],
+		('bigBed', 'encode_elements_dnase_tf'): ['-tab', '-type=bigBed5+1', chromInfo, '-as=%s/as/encode_elements_dnase_tf.as' % encValData],
+		('bed', 'candidate enhancer predictions'): ['-type=bed3+', chromInfo, '-as=%s/as/candidate_enhancer_prediction.as' % encValData],
+		('bigBed', 'candidate enhancer predictions'): ['-type=bigBed3+', chromInfo, '-as=%s/as/candidate_enhancer_prediction.as' % encValData],
+		('bed', 'enhancer predictions'): ['-type=bed3+', chromInfo, '-as=%s/as/enhancer_prediction.as' % encValData],
+		('bigBed', 'enhancer predictions'): ['-type=bigBed3+', chromInfo, '-as=%s/as/enhancer_prediction.as' % encValData],
+		('bed', 'bed3+'): ['-tab', '-type=bed3+', chromInfo],
+		('bigBed', 'bed3+'): ['-tab', '-type=bigBed3+', chromInfo],
+		('bed', 'bed6+'): ['-tab', '-type=bed6+', chromInfo],
+		('bigBed', 'bed6+'): ['-tab', '-type=bigBed6+', chromInfo],
+		('bed', 'bed9+'): ['-tab', '-type=bed9+', chromInfo],
+		('bigBed', 'bed9+'): ['-tab', '-type=bigBed9+', chromInfo],
+		('bed', 'unknown'): ['-tab', '-type=bed3+', chromInfo],
+		('bigBed', 'unknown'): ['-tab', '-type=bigBed3+', chromInfo],
 		('rcc', None): ['-type=rcc'],
 		('idat', None): ['-type=idat'],
 		('bedpe', None): ['-type=bed3+', chromInfo],
@@ -213,6 +235,7 @@ def validate_file(f_obj, encValData, assembly=None, as_path=None):
 		('hdf5', None): None,
 		('gff', None): None
 	}
+
 
 	validate_args = validate_map.get((file_format, file_format_type))
 
@@ -282,6 +305,8 @@ def upload_file(file_obj, dryrun=False):
 			return 0
 
 def get_asfile(uri_json, server, keypair):
+	if not uri_json:
+		return None
 	try:
 		uris = json.loads(uri_json)
 	except:
@@ -309,7 +334,7 @@ def get_asfile(uri_json, server, keypair):
 def process_row(row):
 	json_payload = {}
 	for key,value in row.iteritems():
-		if not key:
+		if not key or not value:
 			continue
 		try:
 			json_payload.update({key:json.loads(value)})
